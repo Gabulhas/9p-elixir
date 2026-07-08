@@ -17,10 +17,10 @@ defmodule Protocolencoder do
     first_part = type_as_bytes(type) <> tag_as_bytes(tag) <> payload
     size_bytes = size_as_bytes(4 + byte_size(first_part))
 
-    IO.inspect(size_bytes, label: "BUILD Size Bytes", binaries: :as_binaries)
-    IO.inspect(type_as_bytes(type), label: "BUILD Type Bytes", binaries: :as_binaries)
-    IO.inspect(tag_as_bytes(tag), label: "BUILD Tag Bytes", binaries: :as_binaries)
-    IO.inspect(payload, label: "BUILD payload Bytes", binaries: :as_binaries)
+    # IO.inspect(size_bytes, label: "BUILD Size Bytes", binaries: :as_binaries)
+    # IO.inspect(type_as_bytes(type), label: "BUILD Type Bytes", binaries: :as_binaries)
+    # IO.inspect(tag_as_bytes(tag), label: "BUILD Tag Bytes", binaries: :as_binaries)
+    # IO.inspect(payload, label: "BUILD payload Bytes", binaries: :as_binaries)
     size_bytes <> first_part
   end
 
@@ -91,6 +91,28 @@ defmodule Protocolencoder do
     build_message(121, tag, <<>>)
   end
 
+  # | **Rremove** | 123 | *(Empty Payload)* | Server confirms deletion. |
+  def encode_message({:rremove, tag}) do
+    build_message(123, tag, <<>>)
+  end
+
+  # | **Rstat** | 125 | `stat[2]`, `stat_data[n]` | Server returns a 2-byte total length, followed by the formatted stat struct. |
+  def encode_message({:rstat, tag, stat}) do
+    encoded_stat = encode_stat(stat)
+
+    payload = <<
+      byte_size(encoded_stat)::little-integer-size(16),
+      encoded_stat::binary
+    >>
+
+    build_message(125, tag, payload)
+  end
+
+  # | **Rwstat** | 127 | *(Empty Payload)* | Server confirms metadata was updated. |
+  def encode_message({:rwstat, tag}) do
+    build_message(127, tag, <<>>)
+  end
+
   defp encode_rwalk_qids(qids) do
     case qids do
       [] -> <<>>
@@ -106,5 +128,44 @@ defmodule Protocolencoder do
       vers::little-integer-size(32),
       path::little-integer-size(64)
     >>
+  end
+
+  def encode_stat(stat) do
+    %Types.Stat{
+      type: type,
+      dev: dev,
+      qid: qid,
+      mode: mode,
+      atime: atime,
+      mtime: mtime,
+      length: length,
+      name: name,
+      uid: uid,
+      gid: gid,
+      muid: muid
+    } = stat
+
+    second_part = <<
+      type::little-integer-size(16),
+      dev::little-integer-size(32),
+      encode_qid(qid)::binary,
+      mode::little-integer-size(32),
+      atime::little-integer-size(32),
+      mtime::little-integer-size(32),
+      length::little-integer-size(64),
+      encode_string(name)::binary,
+      encode_string(uid)::binary,
+      encode_string(gid)::binary,
+      encode_string(muid)::binary
+    >>
+
+    <<
+      byte_size(second_part)::little-integer-size(16),
+      second_part::binary
+    >>
+  end
+
+  defp encode_string(s) do
+    <<String.length(s)::little-integer-size(16), s::binary>>
   end
 end

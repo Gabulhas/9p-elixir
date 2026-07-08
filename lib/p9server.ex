@@ -58,13 +58,17 @@ defmodule P9server do
   defp serve_loop(socket, fid_store, file_store) do
     case receive_message(socket) do
       {:ok, received_message} ->
-        IO.inspect(socket)
-        IO.inspect(received_message)
         parsed_message = Protocolparser.parse_payload(received_message)
         IO.inspect(parsed_message)
 
-        r = response(received_message, parsed_message, fid_store, file_store)
-        :gen_tcp.send(socket, r)
+        case response(received_message, parsed_message, fid_store, file_store) do
+          data when is_binary(data) or is_list(data) ->
+            :gen_tcp.send(socket, data)
+
+          other ->
+            IO.inspect(other, label: "INVALID RESPONSE FORMAT FROM HANDLER")
+        end
+
         serve_loop(socket, fid_store, file_store)
 
       {:error, reason} ->
@@ -77,20 +81,6 @@ defmodule P9server do
       tag: tag
     } = message
 
-    Fakefilesystem.MessageHandle
-  end
-
-  def handle_open_file(fid_path, opts, file_store) do
-    if File.dir?(fid_path) do
-      Agent.update(file_store, fn state ->
-        Map.put(state, fid_path, %{file: nil, opts: opts})
-      end)
-    else
-      {:ok, file} = Fakefilesystem.open_file(fid_path, opts)
-
-      Agent.update(file_store, fn state ->
-        Map.put(state, fid_path, %{file: file, opts: opts})
-      end)
-    end
+    Fakefilesystem.MessageHandler.handle(parsed, tag, fid_store, file_store)
   end
 end

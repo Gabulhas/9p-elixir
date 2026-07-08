@@ -31,3 +31,35 @@ defmodule Types.QID do
           path: Types.Common.uint64()
         }
 end
+
+defmodule Types.Stat do
+  defstruct [
+    :size,
+    :type,
+    :dev,
+    :qid,
+    :mode,
+    :atime,
+    :mtime,
+    :length,
+    :name,
+    :uid,
+    :gid,
+    :muid
+  ]
+
+  @type t :: %__MODULE__{
+          size: Types.Common.uint16(),
+          type: Types.Common.uint16(),
+          dev: Types.Common.uint32(),
+          qid: Types.QID.t(),
+          mode: Types.Common.uint32(),
+          atime: Types.Common.uint32(),
+          mtime: Types.Common.uint32(),
+          length: Types.Common.uint64(),
+          name: String.t(),
+          uid: String.t(),
+          gid: String.t(),
+          muid: String.t()
+        }
+end

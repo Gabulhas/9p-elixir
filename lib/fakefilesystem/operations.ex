@@ -24,7 +24,7 @@ defmodule Fakefilesystem.Operations do
 
     with {:ok, expanded_path} <- to_safe(raw_new_path),
          true <- File.exists?(expanded_path) do
-      {:ok, new_qid} = generate_qid_for_real_file(expanded_path)
+      {:ok, new_qid} = get_qid(expanded_path)
       walk_rec(expanded_path, tail, [new_qid | qids])
     else
       {:error, :unsafe} ->
@@ -32,32 +32,6 @@ defmodule Fakefilesystem.Operations do
 
       false ->
         if qids == [], do: {:error, "file not found"}, else: {:ok, Enum.reverse(qids), ""}
-    end
-  end
-
-  def generate_qid_for_real_file(actual_os_path) do
-    case File.stat(actual_os_path, time: :posix) do
-      {:ok, stat} ->
-        qid_type =
-          case stat.type do
-            :directory -> 0x80
-            :regular -> 0x00
-            _ -> 0x00
-          end
-
-        qid_version = stat.mtime
-
-        qid_path = stat.inode
-
-        {:ok,
-         %Types.QID{
-           type: qid_type,
-           vers: qid_version,
-           path: qid_path
-         }}
-
-      {:error, _} ->
-        {:error, "file doesn't exist"}
     end
   end
 
@@ -83,7 +57,7 @@ defmodule Fakefilesystem.Operations do
   def read_file(file) do
     case File.read(file) do
       {:error, reason} ->
-        {:error, "reading file: #{reason}"}
+        {:error, "reading file '#{file}': #{reason}"}
 
       result ->
         result
@@ -99,7 +73,7 @@ defmodule Fakefilesystem.Operations do
         {:ok, <<>>}
 
       {:error, reason} ->
-        {:error, "reading file: #{reason}"}
+        {:error, "reading file '#{file}': #{reason}"}
     end
   end
 
@@ -143,12 +117,100 @@ defmodule Fakefilesystem.Operations do
     :file.close(file)
   end
 
+  def remove_file(file_or_dir) do
+    :file.del_dir_r(file_or_dir)
+  end
+
+  def get_qid(fid_path) do
+    with {:ok, %Types.Stat{qid: qid}} <- stat(fid_path) do
+      {:ok, qid}
+    end
+  end
+
+  def stat(fid_path) do
+    case File.stat(fid_path, time: :posix) do
+      {:ok, stat} ->
+        qid_type = if stat.type == :directory, do: 0x80, else: 0x00
+
+        qid = %Types.QID{
+          type: qid_type,
+          vers: stat.mtime,
+          path: stat.inode
+        }
+
+        length = if stat.type == :directory, do: 0, else: stat.size
+        mode = if stat.type == :directory, do: stat.mode ||| 0x80000000, else: stat.mode
+
+        {:ok,
+         %Types.Stat{
+           size: 0,
+           type: 0,
+           dev: 0,
+           qid: qid,
+           mode: mode,
+           atime: stat.atime,
+           mtime: stat.mtime,
+           length: length,
+           name: Path.basename(fid_path),
+           uid: "root",
+           gid: "root",
+           muid: "root"
+         }}
+
+      {:error, reason} ->
+        {:error, "failed to stat file: #{inspect(reason)}"}
+    end
+  end
+
+  @dont_touch_32 0xFFFFFFFF
+  @dont_touch_64 0xFFFFFFFFFFFFFFFF
+
+  def wstat(current_path, %Types.Stat{} = new_stat) do
+    path_to_modify = current_path
+
+    path_to_modify =
+      if new_stat.name != "" do
+        new_full_path = Path.join(Path.dirname(path_to_modify), new_stat.name)
+
+        case File.rename(path_to_modify, new_full_path) do
+          :ok -> new_full_path
+          {:error, _} -> path_to_modify
+        end
+      else
+        path_to_modify
+      end
+
+    if new_stat.mode != @dont_touch_32 do
+      unix_perms = new_stat.mode &&& 0x1FF
+      File.chmod(path_to_modify, unix_perms)
+    end
+
+    if new_stat.length != @dont_touch_64 do
+      {:ok, file_info} = :file.read_file_info(path_to_modify)
+      new_info = process_file_info_record(file_info, new_stat.length)
+      :file.write_file_info(path_to_modify, new_info)
+    end
+
+    {:ok, path_to_modify}
+  end
+
+  defp process_file_info_record(info, new_length) do
+    put_elem(info, 1, new_length)
+  end
+
+  def list_dir(dir_path) do
+    case File.ls(dir_path) do
+      {:ok, files} -> {:ok, files}
+      {:error, reason} -> {:error, "failed to list directory: #{inspect(reason)}"}
+    end
+  end
+
   def fake_root do
     Path.absname("./exampleroot")
   end
 
   def fake_root_qid do
-    generate_qid_for_real_file(fake_root())
+    get_qid(fake_root())
   end
 
   def true_file_path(fake_path) do

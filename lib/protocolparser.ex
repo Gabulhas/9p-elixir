@@ -117,6 +117,73 @@ defmodule Protocolparser do
     {:tclunk, fid}
   end
 
+  # | **Tremove** | 122 | `fid[4]` | Client deletes the file/dir. Server removes it and clunks the `fid`. |
+  def parse_payload(%Messages{type: 122, payload: payload}) do
+    <<fid::little-integer-size(32)>> = payload
+    {:tremove, fid}
+  end
+
+  # | **Tstat** | 124 | `fid[4]` | Client requests metadata (stat) for `fid`. Used for `ls`. |
+  def parse_payload(%Messages{type: 124, payload: payload}) do
+    <<fid::little-integer-size(32)>> = payload
+    {:tstat, fid}
+  end
+
+  # | **Twstat** | 126 | `fid[4]`, `stat[2]`, `stat_data[n]` | Client modifies metadata (renaming, changing permissions). |
+  def parse_payload(%Messages{type: 126, payload: payload}) do
+    <<
+      fid::little-integer-size(32),
+      _outer_buffer_size::little-integer-size(16),
+      stat_size::little-integer-size(16),
+      type::little-integer-size(16),
+      dev::little-integer-size(32),
+
+      # QID 
+      qid_type::8,
+      qid_vers::little-integer-size(32),
+      qid_path::little-integer-size(64),
+
+      # Rest
+      mode::little-integer-size(32),
+      atime::little-integer-size(32),
+      mtime::little-integer-size(32),
+      length::little-integer-size(64),
+
+      # boring
+      name_len::little-integer-size(16),
+      name::binary-size(name_len),
+      uid_len::little-integer-size(16),
+      uid::binary-size(uid_len),
+      gid_len::little-integer-size(16),
+      gid::binary-size(gid_len),
+      muid_len::little-integer-size(16),
+      muid::binary-size(muid_len)
+    >> = payload
+
+    qid = %Types.QID{
+      type: qid_type,
+      vers: qid_vers,
+      path: qid_path
+    }
+
+    stat = %Types.Stat{
+      size: stat_size,
+      type: type,
+      dev: dev,
+      qid: qid,
+      mode: mode,
+      atime: atime,
+      mtime: mtime,
+      length: length,
+      name: name,
+      uid: uid,
+      gid: gid,
+      muid: muid
+    }
+
+    {:twstat, fid, stat}
+  end
+
   # Catch-all for unimplemented messages so your server doesn't crash
   def parse_payload(%Messages{type: type}) do
     IO.puts("Unhandled message type: #{type}")
