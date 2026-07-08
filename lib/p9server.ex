@@ -59,7 +59,7 @@ defmodule P9server do
     case receive_message(socket) do
       {:ok, received_message} ->
         parsed_message = Protocolparser.parse_payload(received_message)
-        IO.inspect(parsed_message)
+        IO.inspect(parsed_message, label: "Received message")
 
         case response(received_message, parsed_message, fid_store, file_store) do
           data when is_binary(data) or is_list(data) ->

@@ -139,7 +139,7 @@ defmodule Fakefilesystem.Operations do
         }
 
         length = if stat.type == :directory, do: 0, else: stat.size
-        mode = if stat.type == :directory, do: stat.mode ||| 0x80000000, else: stat.mode
+        mode = if stat.type == :directory, do: 0x800001FF, else: 0x01B6
 
         {:ok,
          %Types.Stat{

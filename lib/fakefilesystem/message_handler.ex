@@ -17,7 +17,6 @@ defmodule Fakefilesystem.MessageHandler do
 
     {:ok, root_qid} = Fakefilesystem.Operations.fake_root_qid()
 
-    IO.inspect(root_qid)
     Protocolencoder.encode_message({:rattach, tag, root_qid})
   end
 
@@ -30,12 +29,8 @@ defmodule Fakefilesystem.MessageHandler do
         end)
       end
 
-      IO.inspect({:rwalk, tag, nwnames, qids, final_path})
       Protocolencoder.encode_message({:rwalk, tag, nwnames, qids})
     else
-      nil ->
-        Protocolencoder.encode_message({:rerror, tag, "invalid fid"})
-
       {:error, reason} ->
         Protocolencoder.encode_message({:rerror, tag, reason})
     end
@@ -47,7 +42,6 @@ defmodule Fakefilesystem.MessageHandler do
       handle_open_file(fid_path, opts, file_store)
       Protocolencoder.encode_message({:ropen, tag, qid, 0})
     else
-      nil -> Protocolencoder.encode_message({:rerror, tag, "invalid fid"})
       {:error, reason} -> Protocolencoder.encode_message({:rerror, tag, reason})
     end
   end
@@ -56,15 +50,16 @@ defmodule Fakefilesystem.MessageHandler do
     with {:ok, %{path: fid_path}} <- get_fid_info(fid, fid_store),
          {:ok, expanded_path} <-
            Fakefilesystem.Operations.create_file_or_directory(fid_path, name, perm),
-         {:ok, qid} = Fakefilesystem.Operations.get_qid(expanded_path) do
-      Agent.update(fid_store, fn state ->
-        Map.put(state, fid, expanded_path)
-      end)
-
-      handle_open_file(fid_path, opts, file_store)
+         {:ok, qid} <- Fakefilesystem.Operations.get_qid(expanded_path),
+         :ok <-
+           Agent.update(fid_store, fn state ->
+             Map.put(state, fid, %{attached: false, path: expanded_path})
+           end),
+         :ok <- handle_open_file(expanded_path, opts, file_store) do
       Protocolencoder.encode_message({:rcreate, tag, qid, 0})
     else
-      {:error, reason} -> Protocolencoder.encode_message({:rerror, tag, reason})
+      {:error, reason} ->
+        Protocolencoder.encode_message({:rerror, tag, reason})
     end
   end
 
@@ -101,9 +96,6 @@ defmodule Fakefilesystem.MessageHandler do
         end
       end
     else
-      :error ->
-        Protocolencoder.encode_message({:rerror, tag, "invalid fid or file not opened"})
-
       {:error, reason} ->
         Protocolencoder.encode_message({:rerror, tag, reason})
     end
@@ -115,30 +107,25 @@ defmodule Fakefilesystem.MessageHandler do
          :ok <- Fakefilesystem.Operations.write_file(file, offset, data) do
       Protocolencoder.encode_message({:rwrite, tag, byte_size(data)})
     else
-      :error ->
-        Protocolencoder.encode_message({:rerror, tag, "invalid fid or file not opened"})
-
       {:error, reason} ->
         Protocolencoder.encode_message({:rerror, tag, reason})
     end
   end
 
   def handle({:tclunk, fid}, tag, fid_store, file_store) do
-    with {:ok, _, %{file: file}} <-
-           get_path_and_file(fid, fid_store, file_store),
-         :ok <- Fakefilesystem.Operations.close_file(file) do
-      Agent.update(fid_store, fn state ->
-        Map.delete(state, fid)
-      end)
+    with {:ok, %{path: fid_path}} <- get_fid_info(fid, fid_store) do
+      case get_file_from_fid(fid_path, file_store) do
+        {:ok, %{file: file, is_directory: false}} when not is_nil(file) ->
+          Fakefilesystem.Operations.close_file(file)
+
+        _ ->
+          :ok
+      end
+
+      Agent.update(fid_store, fn state -> Map.delete(state, fid) end)
 
       Protocolencoder.encode_message({:rclunk, tag})
     else
-      nil ->
-        Protocolencoder.encode_message({:rerror, tag, "file not open to be closed"})
-
-      :error ->
-        Protocolencoder.encode_message({:rerror, tag, "invalid fid or file not opened"})
-
       {:error, reason} ->
         Protocolencoder.encode_message({:rerror, tag, reason})
     end
@@ -173,7 +160,6 @@ defmodule Fakefilesystem.MessageHandler do
          {:ok, stat} <- Fakefilesystem.Operations.stat(fid_path) do
       Protocolencoder.encode_message({:rstat, tag, stat})
     else
-      nil -> Protocolencoder.encode_message({:rerror, tag, "invalid fid"})
       {:error, reason} -> Protocolencoder.encode_message({:rerror, tag, reason})
     end
   end
@@ -201,27 +187,36 @@ defmodule Fakefilesystem.MessageHandler do
 
       Protocolencoder.encode_message({:rwstat, tag})
     else
-      nil ->
-        Protocolencoder.encode_message({:rerror, tag, "invalid fid"})
-
       {:error, reason} ->
         Protocolencoder.encode_message({:rerror, tag, reason})
     end
   end
 
   def get_fid_info(fid, fid_store) do
-    Agent.get(fid_store, fn state -> Map.fetch(state, fid) end)
+    case Agent.get(fid_store, fn state -> Map.fetch(state, fid) end) do
+      {:ok, info} -> {:ok, info}
+      :error -> {:error, "fid not found"}
+    end
   end
 
   def get_file_from_fid(fid_path, file_store) do
-    Agent.get(file_store, fn state -> Map.fetch(state, fid_path) end)
+    case Agent.get(file_store, fn state -> Map.fetch(state, fid_path) end) do
+      {:ok, info} -> {:ok, info}
+      :error -> {:error, "file not found or open"}
+    end
   end
 
   def get_path_and_file(fid, fid_store, file_store) do
-    with {:ok, fid_info} <- get_fid_info(fid, fid_store),
+    with {:ok, fid_info} <-
+           get_fid_info(fid, fid_store),
          %{path: fid_path} <- fid_info,
-         {:ok, file} <- get_file_from_fid(fid_path, file_store) do
+         {:ok, file} <-
+           get_file_from_fid(fid_path, file_store) do
       {:ok, fid_info, file}
+    else
+      {:error, error} -> {:error, error}
+      :error -> {:error, "invalid fid or file not open"}
+      other -> raise "Impossible, got #{IO.inspect(other)} from get_path_and_file"
     end
   end
 
@@ -231,11 +226,11 @@ defmodule Fakefilesystem.MessageHandler do
         Map.put(state, fid_path, %{file: nil, opts: opts, is_directory: true})
       end)
     else
-      {:ok, file} = Fakefilesystem.Operations.open_file(fid_path, opts)
-
-      Agent.update(file_store, fn state ->
-        Map.put(state, fid_path, %{file: file, opts: opts, is_directory: false})
-      end)
+      with {:ok, file} <- Fakefilesystem.Operations.open_file(fid_path, opts) do
+        Agent.update(file_store, fn state ->
+          Map.put(state, fid_path, %{file: file, opts: opts, is_directory: false})
+        end)
+      end
     end
   end
 
